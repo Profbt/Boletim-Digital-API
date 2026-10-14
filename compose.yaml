@@ -1,0 +1,13 @@
+# Apenas para desenvolvimento local. No Coolify, use o Dockerfile e configure /data separadamente.
+services:
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_PATH: /data/boletim.db
+      ALLOWED_CLASSES: ${ALLOWED_CLASSES:-8A,8B,8C,9A,9B,9C}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://profbt.github.io}
+      ENVIRONMENT: development
+    volumes:
+      - ./data:/data
