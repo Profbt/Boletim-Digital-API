@@ -7,7 +7,7 @@ services:
     environment:
       DATABASE_PATH: /data/boletim.db
       ALLOWED_CLASSES: ${ALLOWED_CLASSES:-8A,8B,8C,9A,9B,9C}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://profbt.github.io}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
       ENVIRONMENT: development
     volumes:
       - ./data:/data

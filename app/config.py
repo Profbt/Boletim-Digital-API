@@ -25,16 +25,18 @@ class Settings:
         ).split(","))
         if not classes or any(not CODIGO_TURMA.fullmatch(x) for x in classes):
             raise ValueError("ALLOWED_CLASSES inválido")
-        origins = tuple(x.strip().rstrip("/") for x in os.getenv(
-            "CORS_ORIGINS", "https://profbt.github.io"
-        ).split(","))
-        for origin in origins:
-            parsed = urlsplit(origin)
-            if (not origin or origin == "*" or parsed.path or parsed.query or parsed.fragment
-                or not parsed.hostname or parsed.username or parsed.password
-                or parsed.scheme not in {"http", "https"}
-                or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"})):
-                raise ValueError("CORS_ORIGINS requer origens explícitas HTTPS (ou localhost HTTP)")
+        raw_origins = os.getenv("CORS_ORIGINS", "*").strip()
+        if raw_origins == "*":
+            origins = ("*",)
+        else:
+            origins = tuple(x.strip().rstrip("/") for x in raw_origins.split(","))
+            for origin in origins:
+                parsed = urlsplit(origin)
+                if (not origin or origin == "*" or parsed.path or parsed.query or parsed.fragment
+                    or not parsed.hostname or parsed.username or parsed.password
+                    or parsed.scheme not in {"http", "https"}
+                    or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"})):
+                    raise ValueError("CORS_ORIGINS requer * ou origens explícitas HTTPS (ou localhost HTTP)")
         environment = os.getenv("ENVIRONMENT", "production").lower()
         if environment not in {"production", "development", "test"}:
             raise ValueError("ENVIRONMENT inválido")

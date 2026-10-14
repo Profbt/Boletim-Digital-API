@@ -26,7 +26,7 @@ Novo: `{"ok":true,"turma":"8C","numero_chamada":17,"novo":true,"dados":null}`. E
 {"turma":"8C","numero_chamada":17,"pin":"202617","dados":{"disciplinas":[{"disciplina":"Matemática","tri1":7.5,"tri2":8.0,"tri3":null,"faltas":[2,1,0]}]}}
 ```
 
-HTTP 200: `{"ok":true,"mensagem":"Dados salvos com sucesso."}`. Credenciais inválidas, turma não permitida, número fora de 1–50, decimal ou texto → HTTP 401 e `{"ok":false,"erro":"Dados de acesso inválidos."}`. Corpo >64 KiB → 413; JSON de dados inválido/absurdo → 422. Excesso de 10 tentativas em 60 s pelo mesmo IP → 429 com `Retry-After: 60`. `/health` não entra no limite. Não enviar conteúdo pessoal no JSON; chaves pessoais comuns são rejeitadas, mas a aplicação não consegue detectar todo dado sensível em texto livre.
+HTTP 200: `{"ok":true,"mensagem":"Dados salvos com sucesso."}`. Credenciais inválidas, turma não permitida, número fora de 1–50, decimal ou texto → HTTP 401 e `{"ok":false,"erro":"Dados de acesso inválidos."}`. Corpo >64 KiB → 413; JSON de dados inválido/absurdo → 422. Excesso de 10 requisições em 60 s por combinação de IP, turma normalizada e número de chamada → 429 com `Retry-After: 60`. `/health` não entra no limite. Não enviar conteúdo pessoal no JSON; chaves pessoais comuns são rejeitadas, mas a aplicação não consegue detectar todo dado sensível em texto livre.
 
 O PIN é `f"2026{numero_chamada:02d}"`: 1→`202601`, 7→`202607`, 17→`202617`, 50→`202650`. Turmas são normalizadas (`strip().upper()`), comparadas à lista configurada e podem ser ampliadas sem mudar o código. O JSON preserva componentes/disciplinas variados; limite de 64 KiB no corpo, 8 níveis, 2000 nós, 500 entradas por lista, 100 campos por objeto, 80 caracteres por chave, 2048 por string. Apenas objeto JSON em `dados`; não executa conteúdo recebido.
 
@@ -38,13 +38,15 @@ Copie os valores de `.env.example` para a configuração do ambiente (não commi
 | --- | --- | --- |
 | `DATABASE_PATH` | `/data/boletim.db` | Caminho absoluto terminando em `boletim.db`; use diretório persistente. |
 | `ALLOWED_CLASSES` | `8A,8B,8C,9A,9B,9C` | Códigos separados por vírgula; sem lista fixa no código. |
-| `CORS_ORIGINS` | `https://profbt.github.io` | Origens explícitas, separadas por vírgula, sem `*`; outras origens de projetos Vercel precisam ser adicionadas uma a uma. HTTP só para localhost. |
+| `CORS_ORIGINS` | `*` | CORS público para frontends didáticos de vários domínios; alternativamente, origens explícitas HTTPS separadas por vírgula (HTTP só para localhost). Não misture `*` com uma lista. |
 | `ENVIRONMENT` | `production` | `production`, `development` ou `test`; documentação interativa desabilitada em produção. |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` (Uvicorn) | Opcional: IPs/redes **dos proxies confiáveis** que fornecem `X-Forwarded-For`; nunca `*`. |
 
-Não há cookies nem CORS com credenciais. CORS não é autenticação: clientes fora de navegador também podem chamar a API. Não configure regex geral para `*.vercel.app`: inclua explicitamente as origens dos projetos autorizados.
+Não há cookies, sessões nem autenticação HTTP automática: turma, chamada e PIN são enviados no corpo e `allow_credentials=False`. `CORS_ORIGINS=*` configura `allow_origins=["*"]`, permitindo GitHub Pages de diferentes usuários e projetos Vercel. Se necessário, uma lista explícita pode restringir origens no futuro.
 
-O limitador é em memória por IP, com janela de 60 s e limite de 10 requisições protegidas (inclusive tentativas válidas) por processo; reiniciar zera os contadores. Atrás do proxy Coolify, sem configurar `FORWARDED_ALLOW_IPS` com o IP/rede real do proxy, todos os estudantes podem compartilhar o mesmo IP aparente e atingir o limite juntos. Descubra a origem da conexão na rede privada, configure somente esse proxy confiável e confirme que ele substitui/controla o cabeçalho `X-Forwarded-For`; não confie num header fornecido diretamente pelo cliente. Use uma só réplica e um só worker nesta versão.
+> CORS permite que os projetos dos estudantes chamem a API a partir de diferentes domínios. CORS não é autenticação e não impede clientes externos como curl ou scripts de acessarem a API.
+
+O limitador é em memória, por chave `(IP, turma.strip().upper(), numero_chamada)`, com janela de 60 s e limite de 10 requisições protegidas **com corpo validado por Pydantic** (inclusive tentativas com PIN errado) por combinação e por processo. Corpos inválidos antes da validação Pydantic não consomem esse contador; a proteção contra corpo excessivo permanece. Reiniciar zera os contadores. Alunos com mesmo IP/NAT não bloqueiam uns aos outros quando usam turmas/chamadas diferentes. Atrás do proxy Coolify, sem configurar `FORWARDED_ALLOW_IPS` com o IP/rede real do proxy, o IP aparente pode ser o do próprio proxy; a separação por turma/chamada ainda funciona, mas alunos que usem a mesma identificação compartilham contador. Descubra a origem da conexão na rede privada, configure somente esse proxy confiável e confirme que ele substitui/controla o cabeçalho `X-Forwarded-For`; não confie num header fornecido diretamente pelo cliente. Use uma só réplica e um só worker nesta versão.
 
 ## Execução local
 

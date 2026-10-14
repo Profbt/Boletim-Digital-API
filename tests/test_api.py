@@ -136,13 +136,30 @@ def test_salvar_exige_pin_e_atualiza_timestamp(client, tmp_path):
     assert client.post(ABRIR, json=acesso()).json()["dados"] == {"disciplinas": []}
 
 
-def test_rate_limit_por_ip(client):
-    for numero in range(10):
-        assert client.post(ABRIR, json=acesso(pin="999999")).status_code == 401
+def test_rate_limit_por_ip_turma_chamada(client):
+    # Mesmo IP; diferenças de caixa/espaço não criam contadores novos.
+    for tentativa in range(10):
+        turma = " 8c " if tentativa % 2 else "8C"
+        assert client.post(ABRIR, json=acesso(turma=turma, pin="999999")).status_code == 401
     resp = client.post(ABRIR, json=acesso())
     assert resp.status_code == 429
     assert resp.headers["retry-after"] == "60"
+    assert resp.json() == {"ok": False, "erro": "Muitas tentativas. Aguarde um minuto."}
+    # Pydantic ainda valida o corpo antes do limitador.
+    assert client.post(ABRIR, json=acesso(numero=17.5, pin="202617")).status_code == 401
+    assert client.post(ABRIR, json=acesso(numero=18, pin="202618")).status_code == 200
+    assert client.post(ABRIR, json=acesso(turma="9A", pin="202617")).status_code == 200
     assert client.get("/health").status_code == 200
+
+
+def test_rate_limit_compartilhado_entre_endpoints(client):
+    for _ in range(9):
+        assert client.post(ABRIR, json=acesso(pin="999999")).status_code == 401
+    assert client.put(SALVAR, json={**acesso(), "dados": EXEMPLO}).status_code == 200
+    resp = client.put(SALVAR, json={**acesso(), "dados": EXEMPLO})
+    assert resp.status_code == 429
+    assert resp.headers["retry-after"] == "60"
+    assert client.put(SALVAR, json={**acesso(numero=18), "dados": EXEMPLO}).status_code == 200
 
 
 def test_cors_controlado(client):
@@ -155,6 +172,39 @@ def test_cors_controlado(client):
     resp = client.post(ABRIR, json=acesso(pin="000000"), headers={"Origin": "https://profbt.github.io"})
     assert resp.status_code == 401
     assert resp.headers["access-control-allow-origin"] == "https://profbt.github.io"
+
+
+def test_cors_publico_para_projetos_distintos(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    settings = Settings.from_env()
+    assert settings.cors_origins == ("*",)
+    api = criar_app(Settings(tmp_path / "boletim.db", settings.allowed_classes,
+                           settings.cors_origins, "test"))
+    with TestClient(api) as client:
+        for origem in ("https://profbt.github.io", "https://outro-aluno.github.io",
+                       "https://boletim-turma.vercel.app"):
+            resp = client.options(ABRIR, headers={"Origin": origem,
+                                                  "Access-Control-Request-Method": "POST",
+                                                  "Access-Control-Request-Headers": "Content-Type"})
+            assert resp.status_code == 200
+            assert resp.headers["access-control-allow-origin"] == "*"
+            assert "POST" in resp.headers["access-control-allow-methods"]
+            assert "PUT" in resp.headers["access-control-allow-methods"]
+            assert "content-type" in resp.headers["access-control-allow-headers"].lower()
+            assert resp.headers.get("access-control-allow-credentials") is None
+            resposta = client.post(ABRIR, json=acesso(pin="999999"), headers={"Origin": origem})
+            assert resposta.status_code == 401
+            assert resposta.headers["access-control-allow-origin"] == "*"
+            assert resposta.headers.get("access-control-allow-credentials") is None
+
+
+def test_cors_explicitamente_restrito_ou_wildcard(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "https://profbt.github.io, https://outro-aluno.github.io")
+    assert Settings.from_env().cors_origins == ("https://profbt.github.io",
+                                                "https://outro-aluno.github.io")
+    monkeypatch.setenv("CORS_ORIGINS", "*,https://profbt.github.io")
+    with pytest.raises(ValueError):
+        Settings.from_env()
 
 
 def test_configuracao_invalida(monkeypatch):

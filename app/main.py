@@ -84,20 +84,20 @@ def validar_dados(valor: dict[str, Any]) -> str:
 
 
 class Limitador:
-    """Janela deslizante por IP; processo único, sem estado distribuído."""
+    """Janela deslizante por IP, turma e chamada; processo único."""
     def __init__(self):
-        self.baldes: dict[str, deque[float]] = {}
+        self.baldes: dict[tuple[str, str, int], deque[float]] = {}
         self.lock = threading.Lock()
 
-    def permitir(self, ip: str) -> bool:
+    def permitir(self, chave: tuple[str, str, int]) -> bool:
         agora = time.monotonic()
         with self.lock:
-            if len(self.baldes) >= 4096 and ip not in self.baldes:
-                self.baldes = {chave: valores for chave, valores in self.baldes.items()
+            if len(self.baldes) >= 4096 and chave not in self.baldes:
+                self.baldes = {identidade: valores for identidade, valores in self.baldes.items()
                                if valores and agora - valores[-1] < 60}
                 if len(self.baldes) >= 4096:
                     return False
-            tentativas = self.baldes.setdefault(ip, deque())
+            tentativas = self.baldes.setdefault(chave, deque())
             while tentativas and agora - tentativas[0] >= 60:
                 tentativas.popleft()
             if len(tentativas) >= 10:
@@ -122,12 +122,8 @@ def criar_app(settings: Settings | None = None) -> FastAPI:
                   docs_url=None if settings.environment == "production" else "/docs",
                   redoc_url=None, openapi_url=None if settings.environment == "production" else "/openapi.json")
     @api.middleware("http")
-    async def proteger_corpo_e_limitar(request: Request, call_next):
+    async def proteger_corpo(request: Request, call_next):
         if request.url.path in PROTECTED:
-            ip = request.client.host if request.client else "desconhecido"
-            if not limitador.permitir(ip):
-                return JSONResponse({"ok": False, "erro": "Muitas tentativas. Aguarde um minuto."},
-                                    status_code=429, headers={"Retry-After": "60"})
             tamanho = request.headers.get("content-length")
             if tamanho:
                 try:
@@ -158,7 +154,17 @@ def criar_app(settings: Settings | None = None) -> FastAPI:
     async def erro_acesso(_request: Request, exc: HTTPException):
         if exc.status_code == 401:
             return JSONResponse(INVALIDO, status_code=401)
+        if exc.status_code == 429:
+            return JSONResponse({"ok": False, "erro": "Muitas tentativas. Aguarde um minuto."},
+                                status_code=429, headers=exc.headers)
         return JSONResponse({"ok": False, "erro": "Requisição inválida."}, status_code=exc.status_code)
+
+    def verificar_limite(acesso: Acesso, request: Request) -> None:
+        # Só após o parsing/validação Pydantic; nunca usar PIN na chave.
+        ip = request.client.host if request.client else "desconhecido"
+        chave = (ip, acesso.turma.strip().upper(), acesso.numero_chamada)
+        if not limitador.permitir(chave):
+            raise HTTPException(status_code=429, headers={"Retry-After": "60"})
 
     def credencial_valida(acesso: Acesso) -> str:
         turma = acesso.turma.strip().upper()
@@ -181,6 +187,7 @@ def criar_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/api/v1/boletins/abrir")
     def abrir(acesso: Acesso, request: Request):
+        verificar_limite(acesso, request)
         turma = autenticar(acesso)
         with Session(request.app.state.engine) as sessao:
             comando = insert(Boletim).values(turma=turma, numero_chamada=acesso.numero_chamada)
@@ -194,6 +201,7 @@ def criar_app(settings: Settings | None = None) -> FastAPI:
 
     @api.put("/api/v1/boletins/salvar")
     def salvar(acesso: Salvamento, request: Request):
+        verificar_limite(acesso, request)
         turma = autenticar(acesso)
         try:
             dados_json = validar_dados(acesso.dados)
